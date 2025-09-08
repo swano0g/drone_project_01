@@ -26,6 +26,11 @@ setup(
             'state_bridge = anafi_ai_bridge.state_bridge_node:main',
             'crazyflie_follower = anafi_ai_bridge.crazyflie_follower_node:main',
             'rtsp_pub = anafi_ai_bridge.rtsp_image_pub_node:main',
+            'anafi_simple_control = anafi_ai_bridge.anafi_simple_control:main',
+            'anafi_sensing_node = anafi_ai_bridge.anafi_sensing_node:main',
+            'anafi_control_node = anafi_ai_bridge.anafi_control_node:main',
+            'creative_behavior_follow_cf = anafi_ai_bridge.creative_behavior_follow_cf:main',
+            'anafi_follow_blue = anafi_ai_bridge.anafi_follow_blue:main',
         ],
     },
 )
