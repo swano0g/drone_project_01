@@ -31,6 +31,8 @@ setup(
             'anafi_control_node = anafi_ai_bridge.anafi_control_node:main',
             'creative_behavior_follow_cf = anafi_ai_bridge.creative_behavior_follow_cf:main',
             'anafi_follow_blue = anafi_ai_bridge.anafi_follow_blue:main',
+            'anafi_follow_apriltag = anafi_ai_bridge.anafi_follow_apriltag:main',
+            'apriltag_debug_overlay = anafi_ai_bridge.apriltag_debug_overlay:main',
         ],
     },
 )

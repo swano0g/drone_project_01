@@ -1,0 +1,7 @@
+/**:
+  ros__parameters:
+    family: "36h11"
+    size: 0.05
+    max_hamming: 0
+    z_up: false
+    publish_tag_detections_image: true
