@@ -1,0 +1,20 @@
+# === Core ===
+numpy==1.26.4
+opencv-python==4.12.0.88     # 서버/헤드리스면 opencv-python-headless 로 교체 가능
+PyYAML==6.0.2
+requests==2.25.1
+protobuf==3.19.4             # Olympe 의존성 호환
+
+# === Crazyflie ===
+cflib==0.1.28
+pyserial==3.5
+pyusb==1.3.1
+transforms3d==0.4.2          # 쓰면 유지, 안 쓰면 제거
+
+# === Parrot Anafi AI (Olympe) ===
+parrot-olympe @ file:///home/rubis/drone_project/parrot_olympe-0.0.0-202508190942-py3-none-linux_aarch64.whl
+
+# === Optional (실제로 쓰면만 남기기) ===
+scipy==1.15.3                # 최적화/필터/보간 등 사용 시
+pandas==1.3.5                # 로그/CSV 처리 시
+

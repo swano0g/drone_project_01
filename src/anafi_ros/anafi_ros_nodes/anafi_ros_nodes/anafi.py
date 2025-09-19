@@ -987,14 +987,40 @@ class Anafi(Node):
 			# 참조 해제
 			yuv_frame.unref()
 
+	# def takeoff_callback(self, request, response):
+	# 	self.node.get_logger().warning("Taking off")
+	# 	self.drone(TakeOff()).wait()  # https://developer.parrot.com/docs/olympe/arsdkng_ardrone3_piloting.html#olympe.messages.ardrone3.Piloting.TakeOff
+	# 	if not self.simulation_environment:
+	# 		run_id = self.drone.get_state(olympe.messages.common.RunState.RunIdChanged) # https://developer.parrot.com/docs/olympe/arsdkng_common_runstate.html#olympe.messages.common.RunState.RunIdChanged
+	# 		self.node.get_logger().debug('Run Id: %s' % (run_id['runId']))
+	# 	return response
+	
+
 	def takeoff_callback(self, request, response):
 		self.node.get_logger().warning("Taking off")
-		self.drone(TakeOff()).wait()  # https://developer.parrot.com/docs/olympe/arsdkng_ardrone3_piloting.html#olympe.messages.ardrone3.Piloting.TakeOff
-		if not self.simulation_environment:
-			run_id = self.drone.get_state(olympe.messages.common.RunState.RunIdChanged) # https://developer.parrot.com/docs/olympe/arsdkng_common_runstate.html#olympe.messages.common.RunState.RunIdChanged
-			self.node.get_logger().debug('Run Id: %s' % (run_id['runId']))
+
+		# 이륙 실행 + 결과 확인 (타임아웃/성공 여부 체크)
+		result = self.drone(TakeOff()).wait(_timeout=20.0)
+		if not result.success():
+			self.node.get_logger().error("TakeOff failed or timed out")
+			return response
+
+		# NOTE:
+		# 일부 조합(특히 SkyController 경유)에서는 RunId가 즉시 초기화되지 않습니다.
+		# 이전 코드처럼 무조건 get_state()를 호출하면 ValueError로 노드가 크래시합니다.
+		try:
+			# 준비가 되었을 때만 선택적으로 로깅
+			run_state = self.drone.get_state(olympe.messages.common.RunState.RunIdChanged)
+			if run_state and 'runId' in run_state:
+				self.node.get_logger().debug('Run Id: %s' % (run_state['runId']))
+			else:
+				self.node.get_logger().debug("RunId not available yet")
+		except Exception as e:
+			# 반드시 예외를 삼켜 노드가 죽지 않게 합니다.
+			self.node.get_logger().debug(f"RunId not ready (ignored): {e}")
+
 		return response
-	
+
 	def hand_launch_callback(self, request, response):
 		if request.data:
 			self.node.get_logger().warning("Enabled hand launch")
