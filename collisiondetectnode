@@ -1,0 +1,82 @@
+import numpy as np
+from rclpy.node import Node
+from std_msgs.msg import Bool
+from vision_msgs.msg import Detection2DArray
+from geometry_msgs.msg import Pose2D
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+
+
+class CollisionDetect(Node):
+	def __init__(self):
+        # hyperparameters
+        self.distance_threshold = 10
+        self.speed_threshold = 10
+        
+		self.node = rclpy.create_node('collisiondetect')
+
+		self.node.get_logger().info("Collision Detect is Running")
+  
+        self.drone_queue = [] # List[(x, y)]
+        self.object_queue = [] # List [(x, y)]
+        
+        # Configure QoS profile for publishing and subscribing
+		qos_profile = QoSProfile(  # https://docs.ros.org/en/rolling/Concepts/Intermediate/About-Quality-of-Service-Settings.html#qos-policies
+			reliability=ReliabilityPolicy.RELIABLE,
+			durability=DurabilityPolicy.VOLATILE,
+			history=HistoryPolicy.KEEP_LAST,
+			depth=1
+		)
+  
+        # Parameter for detection
+        self.drone_id = "drone"
+        self.object_id = "object"
+		
+		# Subscribers
+		self.node.create_subscription(Detection2DArray, 'camera/command', self.boundingbox_callback) # when bounding box information got
+
+		# Publishers
+		self.pub_collision = self.node.create_publisher(Bool, 'collision/detected', qos_profile)
+  
+    def boundingbox_callback(self, msg):
+        for det in msg.detections:
+            cx = det.bbox.center.x 
+            cy = det.bbox.center.y 
+            
+            object_class = det.results[0].hypothesis.class_id 
+            
+            if object_class == self.drone_id:
+                self.drone_queue.append((cx, cy))
+                
+            elif object_class == self.object_id:
+                self.object_queue.append((cx, cy))
+        
+        will_collide = self.will_collide()
+        
+        self.publish_collisions(will_collide)
+        
+    def publish_collisions(self, collision):
+        msg = Bool()
+        msg.data = collision
+
+        self.pub_collision.publish(msg)
+  
+    def will_collide(self):
+        # only calculate if there are enough number of datas in the queue
+        if len(self.object_queue) <= 1 or len(self.drone_queue) <= 1:
+            return False 
+        
+        ball_pos_1 = self.object_queue[-1]
+        ball_pos_2 = self.object_queue[-2]
+        
+        speed = np.sqrt((ball_pos_1[1] - ball_pos_2[1]) ** 2 + (ball_pos_1[0] - ball_pos_2[0]) ** 2)
+
+        drone_pos = self.drone_queue[-1]
+
+        m = (ball_pos_1[1] - ball_pos_2[1]) / (ball_pos_1[0] - ball_pos_2[0])
+        c = ball_pos_1[1] - m * ball_pos_1[0]
+
+        d = abs(drone_pos[1] - m * drone_pos[0] + c) / np.sqrt(1 + m ** 2)
+
+        if d < self.distance_threshold and speed > self.speed_threshold:
+            return True 
+        return False
