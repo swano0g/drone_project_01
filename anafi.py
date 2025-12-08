@@ -93,9 +93,13 @@ class DroneController:
         self.skycontroller_ip = skycontroller_ip
         self.skycontroller_enabled = bool(self.skycontroller_ip)
         self.drone: olympe.Drone | None = None
-        self.pdraw: olympe.Pdraw | None = None
         self._running = True
         self.offboard_enabled = False
+        self.frame_queue: "queue.Queue[olympe.VideoFrame]" = queue.Queue(maxsize=2)
+        self._worker_stop = threading.Event()
+        self._frame_thread: threading.Thread | None = None
+        self._watchdog_thread: threading.Thread | None = None
+        self._last_frame_time = time.time()
 
     def run(self) -> None:
         logging.info("Olympe process bootstrapping")
@@ -120,18 +124,16 @@ class DroneController:
 
         logging.info("Connected to Anafi at %s", self.drone_ip)
 
-        # Configure Pdraw-based streaming callback.
-        self.drone.set_streaming_callbacks(raw_cb=self._pdraw_frame_cb)
-        self.drone.start_video_streaming()
-
-        # Keep a direct Pdraw reference for explicit lifecycle management.
-        self.pdraw = olympe.Pdraw(wait_for_connection=False)
-        self.pdraw.set_callbacks(raw_cb=self._pdraw_frame_cb)
-        stream_url = f"rtsp://{self.drone_ip}/live"
-        if not self.pdraw.play_stream(stream_url):
-            logging.warning("Failed to start standalone Pdraw stream at %s", stream_url)
-        else:
-            logging.info("Pdraw streaming from %s", stream_url)
+        # Configure streaming callbacks similar to the reference implementation.
+        self.drone.streaming.set_callbacks(
+            raw_cb=self._yuv_frame_cb,
+            flush_raw_cb=self._flush_cb,
+        )
+        self._start_streaming()
+        self._frame_thread = threading.Thread(
+            target=self._frame_processing_loop, name="FrameProcessor", daemon=True
+        )
+        self._frame_thread.start()
 
     def _command_loop(self) -> None:
         assert self.drone is not None
@@ -285,47 +287,89 @@ class DroneController:
 
         return True, "No change in offboard state"
 
-    def _pdraw_frame_cb(self, yuv_frame) -> None:
-        """Copy frames from the Pdraw callback into shared memory."""
+    def _yuv_frame_cb(self, yuv_frame) -> None:
+        """Queue frames for processing, mirroring the reference implementation."""
         if yuv_frame is None:
             return
 
+        yuv_frame.ref()
+        if self.frame_queue.full():
+            try:
+                old_frame = self.frame_queue.get_nowait()
+                old_frame.unref()
+            except queue.Empty:
+                pass
+        self.frame_queue.put_nowait(yuv_frame)
+
+    def _flush_cb(self, stream) -> bool:
+        if stream.get("vdef_format") not in (olympe.VDEF_I420, olympe.VDEF_NV12):
+            return True
+        while not self.frame_queue.empty():
+            try:
+                frame = self.frame_queue.get_nowait()
+                frame.unref()
+            except queue.Empty:
+                break
+        return True
+
+    def _frame_processing_loop(self) -> None:
+        """Convert queued frames to BGR and copy them into shared memory."""
+        conversion_map = {
+            olympe.VDEF_I420: cv2.COLOR_YUV2BGR_I420,
+            olympe.VDEF_NV12: cv2.COLOR_YUV2BGR_NV12,
+        }
+        while not self._worker_stop.is_set():
+            try:
+                yuv_frame = self.frame_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            self._last_frame_time = time.time()
+            try:
+                cvt_flag = conversion_map.get(yuv_frame.format())
+                if cvt_flag is None:
+                    logging.debug("Unsupported frame format received")
+                    continue
+                bgr_frame = cv2.cvtColor(yuv_frame.as_ndarray(), cvt_flag)
+
+                if (
+                    bgr_frame.shape[0] != self.frame_shape[0]
+                    or bgr_frame.shape[1] != self.frame_shape[1]
+                ):
+                    bgr_frame = cv2.resize(
+                        bgr_frame,
+                        (self.frame_shape[1], self.frame_shape[0]),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+
+                np.copyto(self.frame_array, bgr_frame)
+            except Exception:
+                logging.debug("Frame conversion failed", exc_info=True)
+            finally:
+                yuv_frame.unref()
+
+    def _start_streaming(self) -> None:
         try:
-            yuv_array = yuv_frame.as_ndarray()
-            bgr_frame = cv2.cvtColor(yuv_array, cv2.COLOR_YUV2BGR_NV12)
+            self.drone.streaming.start(media_name="DefaultVideo")
+            self._last_frame_time = time.time()
         except Exception:
-            logging.debug("Could not convert incoming frame", exc_info=True)
-            return
-
-        # Resize if the source does not match the shared memory dimensions.
-        if (
-            bgr_frame.shape[0] != self.frame_shape[0]
-            or bgr_frame.shape[1] != self.frame_shape[1]
-        ):
-            bgr_frame = cv2.resize(
-                bgr_frame,
-                (self.frame_shape[1], self.frame_shape[0]),
-                interpolation=cv2.INTER_LINEAR,
-            )
-
-        np.copyto(self.frame_array, bgr_frame)
+            logging.exception("Failed to start streaming")
 
     def shutdown(self) -> None:
         self._running = False
-        if self.pdraw is not None:
+        self._worker_stop.set()
+        if self._frame_thread is not None:
+            self._frame_thread.join(timeout=2.0)
+        while not self.frame_queue.empty():
             try:
-                self.pdraw.stop()
-            except Exception:
-                logging.debug("Failed to stop Pdraw cleanly", exc_info=True)
-            try:
-                self.pdraw.close()
-            except Exception:
-                logging.debug("Failed to close Pdraw cleanly", exc_info=True)
-            self.pdraw = None
+                frame = self.frame_queue.get_nowait()
+                frame.unref()
+            except queue.Empty:
+                break
 
         if self.drone is not None:
             try:
-                self.drone.stop_video_streaming()
+                self.drone.streaming.stop()
             except Exception:
                 logging.debug("stop_video_streaming failed", exc_info=True)
             try:
