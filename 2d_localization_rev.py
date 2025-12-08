@@ -65,14 +65,37 @@ class VideoLocalizer:
     #   Low-level helper methods
     # -----------------------------
     def _extract_points(self, gray, bbox):
-        """Extract optical-flow keypoints inside bbox."""
-        x1, y1, x2, y2 = bbox
-        mask = np.zeros_like(gray)
-        mask[int(y1): int(y2), int(x1): int(x2)] = 255
+        """Extract optical-flow keypoints inside bbox (ROI only)."""
+        h, w = gray.shape[:2]
+        x1 = max(0, int(bbox[0]))
+        y1 = max(0, int(bbox[1]))
+        x2 = min(w, int(bbox[2]))
+        y2 = min(h, int(bbox[3]))
+        
+        if x2 <= x1 or y2 <= y1:
+            return None
+        
+        roi = gray[y1:y2, x1:x2]
         pts = cv2.goodFeaturesToTrack(
-            gray, mask=mask, maxCorners=50, qualityLevel=0.01, minDistance=3
+            roi, maxCorners=20, qualityLevel=0.05, minDistance=5
         )
+        
+        if pts is None:
+            return None
+        
+        # ROI -> 전체 이미지 좌표
+        pts[:, 0, 0] += x1
+        pts[:, 0, 1] += y1
         return pts
+    # def _extract_points(self, gray, bbox):
+    #     """Extract optical-flow keypoints inside bbox."""
+    #     x1, y1, x2, y2 = bbox
+    #     mask = np.zeros_like(gray)
+    #     mask[int(y1): int(y2), int(x1): int(x2)] = 255
+    #     pts = cv2.goodFeaturesToTrack(
+    #         gray, mask=mask, maxCorners=50, qualityLevel=0.01, minDistance=3
+    #     )
+    #     return pts
 
     def _optical_flow_predict(self, prev_gray, curr_gray, tracks):
         """Shift existing tracks using Lucas-Kanade optical flow prediction.
